@@ -27,5 +27,5 @@ jupyter notebook --ip=0.0.0.0 --port=8888 --allow-root
 
 ### 4.Prepare Sample Datasets
 ```bash
-python prepare_datasets.py
+python prepare_datasets.py --save
 ```
