@@ -17,7 +17,7 @@ docker run -itd --name topic -p 8888:8888 -v [LocalPath]:/workspace bertopic:org
 ```
 
 ### 3. Jupyter Notebook
-
+> you can access `localhost:8888`
 ```bash
 exec -it bertopic /bash
 
