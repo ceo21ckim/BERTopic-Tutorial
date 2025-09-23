@@ -13,7 +13,7 @@ cd BERTopic-Tutorial
 ```bash
 docker build -t bertopic:org .
 
-docker run -itd --name topic -p 8888:8888 -v c:\Users\user:/workspace bertopic:org
+docker run -itd --name topic -p 8888:8888 -v [LocalPath]:/workspace bertopic:org
 ```
 
 ### 3. Jupyter Notebook
