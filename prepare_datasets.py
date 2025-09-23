@@ -1,6 +1,12 @@
 import os, pandas as pd, numpy as np 
 import datasets 
 from typing import Tuple 
+import argparse 
+
+parser = argparse.ArgumentParser(description='load/save datasets')
+parser.add_argument('--save', '-s', action='store_true')
+
+args = parser.parse_args()
 
 class DataLoader:
     def __init__(self, source="daekeun-ml/naver-news-summarization-ko", save=True):
@@ -49,5 +55,5 @@ class DataLoader:
             print(f"Success Saving datasets: [PATH: {path}]")
                 
 if __name__ == '__main__':
-    data_loader = DataLoader(save=True)
+    data_loader = DataLoader(save=args.save)
     train, valid, test = data_loader.train_set, data_loader.valid_set, data_loader.test_set
