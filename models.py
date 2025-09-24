@@ -1,14 +1,156 @@
 from typing import Mapping, List, Tuple, Union
 
-import pandas as pd, json, time 
+import pandas as pd, json, time
 from scipy.sparse import csr_matrix
 
-from sklearn.feature_extraction.text import CountVectorizer, TfidfTransformer
-
+from bertopic import BERTopic
+from bertopic import ClassTfidfTransformer
+from bertopic.representation import TextGeneration
 from bertopic.representation._base import BaseRepresentation
-from bertopic.representation._utils import truncate_document, validate_truncate_document_parameters
-from bertopic.vectorizers import ClassTfidfTransformer
+from bertopic.representation._utils import truncate_document
 from tqdm import tqdm 
+
+from sklearn.feature_extraction.text import CountVectorizer, TfidfTransformer
+from sklearn.decomposition import PCA 
+
+DEFAULT_PROMPT = """
+[INST]
+I have a topic that contains the following documents:
+[DOCUMENTS]
+
+The topic is described by the following keywords: '[KEYWORDS]'.
+
+Based on the information about the topic above, please create a short label of this topic. Make sure you to only return the label and nothing more.
+[/INST]
+"""
+
+class BasicBERTopicModel:
+    def __init__(
+        self,
+        language: str = "korean",
+        top_n_words: int = 10,
+        n_gram_range: Tuple[int, int] = (1, 1),
+        min_topic_size: int = 10,
+        nr_topics: Union[int, str] = None,
+        low_memory: bool = False,
+        embedding_model=None,
+        umap_model=None,
+        hdbscan_model=None,
+        vectorizer_model: CountVectorizer = None,
+        ctfidf_model: TfidfTransformer = None,
+        representation_model: BaseRepresentation = None,
+        verbose: bool = False,
+        embed_model_id=None,
+        repr_model_id=None,
+        prompt=None,
+        **kwargs
+    ):
+        self.language=language; self.top_n_words=top_n_words; self.n_gram_range=n_gram_range
+        self.min_topic_size=min_topic_size; self.nr_topics=nr_topics; self.low_memory=low_memory
+        self.embedding_model=embedding_model; self.umap_model=umap_model; self.hdbscan_model=hdbscan_model; self.model_id=embed_model_id; self.repr_model_id=repr_model_id
+        self.vectorizer_model=vectorizer_model; self.ctfidf_model=ctfidf_model; self.representation_model=representation_model; self.verbose=verbose; self.prompt=prompt
+        self.set_internal_parameters(**kwargs)
+        
+        if self.embedding_model is None: 
+            try: self.embedding_model = self._load_embedding_model(self.embed_model_id)
+            except Exception as e: print(e)
+        if self.prompt is None: prompt=DEFAULT_PROMPT
+        if self.umap_model is None: self.umap_model = self._load_umap_model()
+        if self.hdbscan_model is None: self.hdbscan_model = self._load_hdbscan_model()
+        if self.vectorizer_model is None: self.vectorizer_model = self._load_vectorizer_model()
+        if self.ctfidf_model is None: self.ctfidf_model = self._load_ctfidf_model()
+        if self.representation_model is None: self.representation_model = self._load_representation_model()
+        
+        self.topic_model = BERTopic(
+            language=self.language, 
+            top_n_words=self.top_n_words, 
+            n_gram_range=self.n_gram_range,
+            nr_topics=self.nr_topics,
+            low_memory=self.low_memory,
+            embedding_model=self.embedding_model, 
+            umap_model=self.umap_model, 
+            hdbscan_model=self.hdbscan_model, 
+            vectorizer_model=self.vectorizer_model, 
+            ctfidf_model=self.ctfidf_model,
+            representation_model=self.representation_model, 
+            verbose=self.verbose, 
+            **kwargs
+        )
+
+    def _load_embedding_model(self, model_id='BAAI/bge-m3'):
+        try: from sentence_transformers import SentenceTransformer
+        except Exception as e: print(e)
+        try: embedding_model = SentenceTransformer(model_id)
+        except Exception as e: print(e)
+        return embedding_model
+    
+    def _load_umap_model(self):
+        try: 
+            from umap import UMAP
+            umap_model = UMAP(
+                n_neighbors=15, 
+                n_components=5, 
+                min_dist=0.0, 
+                metric='cosine',
+                low_memory=self.low_memory
+            )
+            return umap_model 
+        
+        except (ImportError, ModuleNotFoundError):
+            umap_model = PCA(n_components=5)
+            return umap_model
+    
+    def _load_hdbscan_model(self):
+        from sklearn.cluster import HDBSCAN
+        hdbscan_model = HDBSCAN(
+            min_cluster_size=self.min_topic_size,
+            metric="euclidean",
+            cluster_selection_method="eom",
+            prediction_data=True,
+        )
+        return hdbscan_model
+    
+    def _load_vectorizer_model(self):
+        vectorizer_model = CountVectorizer(ngram_range=self.n_gram_range)
+        return vectorizer_model 
+    
+    def _load_ctfidf_model(self):
+        ctfidf_model = ClassTfidfTransformer()
+        return ctfidf_model 
+    
+    def _load_representation_model(self):
+        import transformers
+        from torch import bfloat16
+        bnb_config = transformers.BitsAndBytesConfig(
+            load_in_4bit=True,  # 4-bit quantization
+            bnb_4bit_quant_type='nf4',  # Normalized float 4
+            bnb_4bit_use_double_quant=True,  # Second quantization after the first
+            bnb_4bit_compute_dtype=bfloat16  # Computation type
+        )
+        
+        tokenizer = transformers.AutoTokenizer.from_pretrained(self.model_id)
+        model = transformers.AutoTokenizer.AutoModelForCausalLLM.from_pretrained(
+            self.repr_model_id,
+            trust_remot_code=True, 
+            quantization_config=bnb_config if self.quantization else None, 
+            device_map='auto'
+        )
+        model.eval()
+        
+        generator = transformers.pipeline(
+            model=model, tokenizer=tokenizer,
+            task='text-generation',
+            temperature=0.1,
+            max_new_tokens=500,
+            repetition_penalty=1.1
+        )
+        representation_model = TextGeneration(generator, prompt=DEFAULT_PROMPT)
+        return representation_model
+        
+    def set_internal_parameters(self, kwargs):
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+
 
 class AnthropicRepresentationModel(BaseRepresentation):
     def __init__(self, client=None, model_id="claude-sonnet-4-20250514", prompt=None, system_prompt=None, delay_in_seconds=2, nr_docs=5, diversity=None, generator_kwargs=None, doc_length=300, tokenizer=None, **kwargs):
