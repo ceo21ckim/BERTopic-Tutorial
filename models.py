@@ -4,7 +4,7 @@ import pandas as pd, json, time
 from scipy.sparse import csr_matrix
 
 from bertopic import BERTopic
-from bertopic import ClassTfidfTransformer
+from bertopic.vectorizers import ClassTfidfTransformer 
 from bertopic.representation import TextGeneration
 from bertopic.representation._base import BaseRepresentation
 from bertopic.representation._utils import truncate_document
@@ -23,6 +23,7 @@ The topic is described by the following keywords: '[KEYWORDS]'.
 Based on the information about the topic above, please create a short label of this topic. Make sure you to only return the label and nothing more.
 [/INST]
 """
+
 
 class BasicBERTopicModel:
     def __init__(
@@ -47,12 +48,11 @@ class BasicBERTopicModel:
     ):
         self.language=language; self.top_n_words=top_n_words; self.n_gram_range=n_gram_range
         self.min_topic_size=min_topic_size; self.nr_topics=nr_topics; self.low_memory=low_memory
-        self.embedding_model=embedding_model; self.umap_model=umap_model; self.hdbscan_model=hdbscan_model; self.model_id=embed_model_id; self.repr_model_id=repr_model_id
+        self.embedding_model=embedding_model; self.umap_model=umap_model; self.hdbscan_model=hdbscan_model; self.embed_model_id=embed_model_id; self.repr_model_id=repr_model_id
         self.vectorizer_model=vectorizer_model; self.ctfidf_model=ctfidf_model; self.representation_model=representation_model; self.verbose=verbose; self.prompt=prompt
-        self.set_internal_parameters(**kwargs)
         
         if self.embedding_model is None: 
-            try: self.embedding_model = self._load_embedding_model(self.embed_model_id)
+            try: self.embedding_model = self._load_embedding_model()
             except Exception as e: print(e)
         if self.prompt is None: prompt=DEFAULT_PROMPT
         if self.umap_model is None: self.umap_model = self._load_umap_model()
@@ -76,6 +76,12 @@ class BasicBERTopicModel:
             verbose=self.verbose, 
             **kwargs
         )
+        
+    def access_huggingface(self, token):
+        from huggingface_hub import login
+        if token is None: ValueError('please input your huggingface api key')
+        login(token)
+        
 
     def _load_embedding_model(self, model_id='BAAI/bge-m3'):
         try: from sentence_transformers import SentenceTransformer
@@ -105,8 +111,7 @@ class BasicBERTopicModel:
         hdbscan_model = HDBSCAN(
             min_cluster_size=self.min_topic_size,
             metric="euclidean",
-            cluster_selection_method="eom",
-            prediction_data=True,
+            cluster_selection_method="eom"
         )
         return hdbscan_model
     
@@ -118,8 +123,9 @@ class BasicBERTopicModel:
         ctfidf_model = ClassTfidfTransformer()
         return ctfidf_model 
     
-    def _load_representation_model(self):
+    def _load_representation_model(self, model_id='google-bert/bert-base-uncased'):
         import transformers
+        self.access_huggingface()
         from torch import bfloat16
         bnb_config = transformers.BitsAndBytesConfig(
             load_in_4bit=True,  # 4-bit quantization
@@ -128,9 +134,9 @@ class BasicBERTopicModel:
             bnb_4bit_compute_dtype=bfloat16  # Computation type
         )
         
-        tokenizer = transformers.AutoTokenizer.from_pretrained(self.model_id)
-        model = transformers.AutoTokenizer.AutoModelForCausalLLM.from_pretrained(
-            self.repr_model_id,
+        tokenizer = transformers.AutoTokenizer.from_pretrained(model_id)
+        model = transformers.AutoModelForCausalLM.from_pretrained(
+            model_id,
             trust_remot_code=True, 
             quantization_config=bnb_config if self.quantization else None, 
             device_map='auto'
