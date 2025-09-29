@@ -1,6 +1,6 @@
 from typing import Mapping, List, Tuple, Union
 
-import pandas as pd, json, time
+import pandas as pd, json, time, torch 
 from scipy.sparse import csr_matrix
 
 from bertopic import BERTopic
@@ -44,10 +44,11 @@ class BasicBERTopicModel:
         embed_model_id=None,
         repr_model_id=None,
         prompt=None,
+        quantization=False,
         **kwargs
     ):
         self.language=language; self.top_n_words=top_n_words; self.n_gram_range=n_gram_range
-        self.min_topic_size=min_topic_size; self.nr_topics=nr_topics; self.low_memory=low_memory
+        self.min_topic_size=min_topic_size; self.nr_topics=nr_topics; self.low_memory=low_memory; self.quantization=quantization
         self.embedding_model=embedding_model; self.umap_model=umap_model; self.hdbscan_model=hdbscan_model; self.embed_model_id=embed_model_id; self.repr_model_id=repr_model_id
         self.vectorizer_model=vectorizer_model; self.ctfidf_model=ctfidf_model; self.representation_model=representation_model; self.verbose=verbose; self.prompt=prompt
         
@@ -77,7 +78,7 @@ class BasicBERTopicModel:
             **kwargs
         )
         
-    def access_huggingface(self, token):
+    def access_huggingface(self, token=None):
         from huggingface_hub import login
         if token is None: ValueError('please input your huggingface api key')
         login(token)
@@ -100,7 +101,7 @@ class BasicBERTopicModel:
                 metric='cosine',
                 low_memory=self.low_memory
             )
-            return umap_model 
+            return umap_model
         
         except (ImportError, ModuleNotFoundError):
             umap_model = PCA(n_components=5)
@@ -126,21 +127,20 @@ class BasicBERTopicModel:
     def _load_representation_model(self, model_id='google-bert/bert-base-uncased'):
         import transformers
         self.access_huggingface()
-        from torch import bfloat16
-        bnb_config = transformers.BitsAndBytesConfig(
-            load_in_4bit=True,  # 4-bit quantization
-            bnb_4bit_quant_type='nf4',  # Normalized float 4
-            bnb_4bit_use_double_quant=True,  # Second quantization after the first
-            bnb_4bit_compute_dtype=bfloat16  # Computation type
-        )
+        if self.quantization:
+            from torch import bfloat16
+            bnb_config = transformers.BitsAndBytesConfig(
+                load_in_4bit=True,  # 4-bit quantization
+                bnb_4bit_quant_type='nf4',  # Normalized float 4
+                bnb_4bit_use_double_quant=True,  # Second quantization after the first
+                bnb_4bit_compute_dtype=bfloat16  # Computation type
+            )
         
         tokenizer = transformers.AutoTokenizer.from_pretrained(model_id)
         model = transformers.AutoModelForCausalLM.from_pretrained(
             model_id,
-            trust_remot_code=True, 
-            quantization_config=bnb_config if self.quantization else None, 
-            device_map='auto'
-        )
+            quantization_config=bnb_config if self.quantization else None
+        ).to('cpu' if torch.cuda.is_available() else 'cuda:0')
         model.eval()
         
         generator = transformers.pipeline(
