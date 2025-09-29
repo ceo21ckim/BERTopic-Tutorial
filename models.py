@@ -10,19 +10,20 @@ from bertopic.representation._base import BaseRepresentation
 from bertopic.representation._utils import truncate_document
 from tqdm import tqdm 
 
+from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
+
 from sklearn.feature_extraction.text import CountVectorizer, TfidfTransformer
 from sklearn.decomposition import PCA 
 
-DEFAULT_PROMPT = """
-[INST]
+DEFAULT_PROMPT = """<|system|>You are a helpful, respectful and honest assistant for labeling topics..</s>
+<|user|>
 I have a topic that contains the following documents:
 [DOCUMENTS]
 
 The topic is described by the following keywords: '[KEYWORDS]'.
 
-Based on the information about the topic above, please create a short label of this topic. Make sure you to only return the label and nothing more.
-[/INST]
-"""
+Based on the information about the topic above, please create a short label of this topic. Make sure you to only return the label and nothing more.</s>
+<|assistant|>"""
 
 
 class BasicBERTopicModel:
@@ -40,7 +41,7 @@ class BasicBERTopicModel:
         vectorizer_model: CountVectorizer = None,
         ctfidf_model: TfidfTransformer = None,
         representation_model: BaseRepresentation = None,
-        verbose: bool = False,
+        verbose: bool = True,
         embed_model_id=None,
         repr_model_id=None,
         prompt=None,
@@ -84,7 +85,7 @@ class BasicBERTopicModel:
         login(token)
         
 
-    def _load_embedding_model(self, model_id='BAAI/bge-m3'):
+    def _load_embedding_model(self, model_id='all-MiniLM-L6-v2'):
         try: from sentence_transformers import SentenceTransformer
         except Exception as e: print(e)
         try: embedding_model = SentenceTransformer(model_id)
@@ -124,7 +125,7 @@ class BasicBERTopicModel:
         ctfidf_model = ClassTfidfTransformer()
         return ctfidf_model 
     
-    def _load_representation_model(self, model_id='google-bert/bert-base-uncased'):
+    def _load_representation_model_llama(self, model_id='meta-llama/Llama-2-7b-chat-hf'):
         import transformers
         self.access_huggingface()
         if self.quantization:
@@ -136,7 +137,7 @@ class BasicBERTopicModel:
                 bnb_4bit_compute_dtype=bfloat16  # Computation type
             )
         
-        tokenizer = transformers.AutoTokenizer.from_pretrained(model_id)
+        self.tokenizer = transformers.AutoTokenizer.from_pretrained(model_id)
         model = transformers.AutoModelForCausalLM.from_pretrained(
             model_id,
             quantization_config=bnb_config if self.quantization else None
@@ -144,19 +145,42 @@ class BasicBERTopicModel:
         model.eval()
         
         generator = transformers.pipeline(
-            model=model, tokenizer=tokenizer,
+            model=model, tokenizer=self.tokenizer,
             task='text-generation',
             temperature=0.1,
             max_new_tokens=500,
             repetition_penalty=1.1
         )
-        representation_model = TextGeneration(generator, prompt=DEFAULT_PROMPT)
+        representation_model = TextGeneration(generator)
+        return representation_model
+    
+    def _load_representation_model_gguf(self, model_id="TheBloke/zephyr-7B-alpha-GGUF"):
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id,
+            gpu_layers=50,
+            hf=True
+        )
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        # Pipeline
+        generator = pipeline(
+            model=model, tokenizer=tokenizer,
+            task='text-generation',
+            max_new_tokens=50,
+            repetition_penalty=1.1
+        )
+        generator = TextGeneration(generator)
+        return {'generator': generator}
+        
+    def _load_representation_model(self):
+        from bertopic.representation import KeyBERTInspired
+        representation_model = KeyBERTInspired()
         return representation_model
         
     def set_internal_parameters(self, kwargs):
         for key, value in kwargs.items():
             setattr(self, key, value)
-
+            
 
 class AnthropicRepresentationModel(BaseRepresentation):
     def __init__(self, client=None, model_id="claude-sonnet-4-20250514", prompt=None, system_prompt=None, delay_in_seconds=2, nr_docs=5, diversity=None, generator_kwargs=None, doc_length=300, tokenizer=None, **kwargs):
