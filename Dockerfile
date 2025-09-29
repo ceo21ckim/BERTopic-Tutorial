@@ -1,10 +1,10 @@
 FROM python:3.10-slim
 
-WORKDIR /
+WORKDIR /workspace
 
 RUN apt-get update && pip install --upgrade pip \
-    && pip install transformers bertopic numpy pandas torch transformers datasets
+    && pip install transformers bertopic numpy pandas torch transformers datasets anthropic sentence-transformers bitsandbytes
 
-RUN pip install jupyter
+CMD ["python3"]
 
-CMD ["python", "run.py"]
+VOLUME [ "/workspace"]
